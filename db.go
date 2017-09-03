@@ -161,6 +161,16 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	succeeded = true
+	p1, _ := bannedUserMap.Get(user.ID)
+	userFailures := (*int64)(p1)
+	p2, _ := bannedIPMap.GetStringKey(remoteAddr)
+	ipFailures := (*int64)(p2)
+
+	for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
+	}
+	for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
+	}
+
 	return user, nil
 }
 
