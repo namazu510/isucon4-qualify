@@ -3,11 +3,12 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"github.com/cornelk/hashmap"
 	"net/http"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/cornelk/hashmap"
 )
 
 const (
@@ -352,21 +353,19 @@ func warmCache() {
 		var succeeded bool
 		rows.Scan(&id, &ip, &succeeded)
 
-		var dummy int64
+		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
-		p1, ok := bannedUserMap.Get(id)
-		if ok {
-			userFailures = (*int64)(p1)
-		} else {
-			userFailures = &dummy
+		p1, ok := bannedUserMap.GetOrInsert(id, unsafe.Pointer(&defaultValue))
+		if !ok {
+			panic("")
 		}
-		p2, ok := bannedIPMap.GetStringKey(ip)
-		if ok {
-			ipFailures = (*int64)(p2)
-		} else {
-			ipFailures = &dummy
+		userFailures = (*int64)(p1)
+		p2, ok := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
+		if !ok {
+			panic("")
 		}
+		ipFailures = (*int64)(p2)
 
 		if succeeded {
 			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
