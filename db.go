@@ -77,7 +77,7 @@ func isLockedUser(user *User) (bool, error) {
 			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
 			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
-		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		// キーを削除しないため、bannedUserMap.Get()は必ず成功する
 		p, _ = bannedUserMap.Get(user.ID)
 	}
 
@@ -111,7 +111,7 @@ func isBannedIP(ip string) (bool, error) {
 			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
 			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
-		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		// キーを削除しないため、bannedIPMap.Get()は必ず成功する
 		p, _ = bannedIPMap.Get(ip)
 	}
 
