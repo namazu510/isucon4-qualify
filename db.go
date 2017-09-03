@@ -44,9 +44,9 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 	return err
 }
 
-func isLockedUser(user *User) (bool, *int64, error) {
+func isLockedUser(user *User) (bool, error) {
 	if user == nil {
-		return false, nil, nil
+		return false, nil
 	}
 
 	p, exists := bannedUserMap.Get(user.ID)
@@ -62,9 +62,9 @@ func isLockedUser(user *User) (bool, *int64, error) {
 
 		switch {
 		case err == sql.ErrNoRows:
-			return false, nil, nil
+			return false, nil
 		case err != nil:
-			return false, nil, err
+			return false, err
 		}
 
 		if !bannedUserMap.Insert(user.ID, unsafe.Pointer(&ni.Int64)) {
@@ -77,10 +77,11 @@ func isLockedUser(user *User) (bool, *int64, error) {
 	}
 
 	counter := (*int64)(p)
-	return UserLockThreshold <= int(atomic.LoadInt64(counter)), counter, nil
+	c := int(atomic.LoadInt64(counter))
+	return UserLockThreshold <= c, nil
 }
 
-func isBannedIP(ip string) (bool, *int64, error) {
+func isBannedIP(ip string) (bool, error) {
 	p, exists := bannedIPMap.GetStringKey(ip)
 	if !exists {
 		// 存在しない場合は、MySQLのlogin_logテーブルからからログイン失敗回数を求める
@@ -95,9 +96,9 @@ func isBannedIP(ip string) (bool, *int64, error) {
 
 		switch {
 		case err == sql.ErrNoRows:
-			return false, nil, nil
+			return false, nil
 		case err != nil:
-			return false, nil, err
+			return false, err
 		}
 
 		if !bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64)) {
@@ -110,7 +111,8 @@ func isBannedIP(ip string) (bool, *int64, error) {
 	}
 
 	counter := (*int64)(p)
-	return IPBanThreshold <= int(atomic.LoadInt64(counter)), counter, nil
+	c := int(atomic.LoadInt64(counter))
+	return IPBanThreshold <= int(c), nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
@@ -126,7 +128,32 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	defer func() {
+		var dummy int64
+		var userFailures, ipFailures *int64
+
 		createLoginLog(succeeded, remoteAddr, loginName, user)
+		p1, ok := bannedUserMap.Get(user.ID)
+		if ok {
+			userFailures = (*int64)(p1)
+		} else {
+			userFailures = &dummy
+		}
+		p2, ok := bannedIPMap.GetStringKey(remoteAddr)
+		if ok {
+			ipFailures = (*int64)(p2)
+		} else {
+			ipFailures = &dummy
+		}
+
+		if succeeded {
+			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
+			}
+			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
+			}
+		} else {
+			atomic.AddInt64(userFailures, 1)
+			atomic.AddInt64(ipFailures, 1)
+		}
 	}()
 
 	row := db.QueryRow(
@@ -142,13 +169,11 @@ func attemptLogin(req *http.Request) (*User, error) {
 		return nil, err
 	}
 
-	if banned, failures, _ := isBannedIP(remoteAddr); banned {
-		atomic.AddInt64(failures, 1)
+	if banned, _ := isBannedIP(remoteAddr); banned {
 		return nil, ErrBannedIP
 	}
 
-	if locked, failures, _ := isLockedUser(user); locked {
-		atomic.AddInt64(failures, 1)
+	if locked, _ := isLockedUser(user); locked {
 		return nil, ErrLockedUser
 	}
 
@@ -161,16 +186,6 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	succeeded = true
-	p1, _ := bannedUserMap.Get(user.ID)
-	userFailures := (*int64)(p1)
-	p2, _ := bannedIPMap.GetStringKey(remoteAddr)
-	ipFailures := (*int64)(p2)
-
-	for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
-	}
-	for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
-	}
-
 	return user, nil
 }
 
