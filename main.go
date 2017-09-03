@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/cornelk/hashmap"
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/martini-contrib/render"
@@ -105,12 +106,8 @@ func main() {
 	})
 
 	m.Get("/init", func(r render.Render) {
-		for key := range bannedIPMap.Iter() {
-			bannedIPMap.Del(key.Key)
-		}
-		for key := range bannedUserMap.Iter() {
-			bannedUserMap.Del(key.Key)
-		}
+		bannedIPMap = hashmap.New(IPMapSize)
+		bannedUserMap = hashmap.New(UserMapSize)
 
 		r.Text(200, "")
 	})
