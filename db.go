@@ -349,14 +349,18 @@ func warmCache() {
 	)
 	for rows.Next() {
 		var ip string
-		var id string
+		var login string
 		var succeeded bool
-		rows.Scan(&id, &ip, &succeeded)
+		rows.Scan(&login, &ip, &succeeded)
 
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
+		userID, ok := userMap[login]
+		if !ok {
+			panic("")
+		}
 
-		p1, _ := bannedUserMap.GetOrInsert(id, unsafe.Pointer(&defaultValue))
+		p1, _ := bannedUserMap.GetOrInsert(userID, unsafe.Pointer(&defaultValue))
 		userFailures = (*int64)(p1)
 		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
 		ipFailures = (*int64)(p2)
