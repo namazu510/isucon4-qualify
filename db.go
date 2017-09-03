@@ -356,15 +356,9 @@ func warmCache() {
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
-		p1, ok := bannedUserMap.GetOrInsert(id, unsafe.Pointer(&defaultValue))
-		if !ok {
-			panic("")
-		}
+		p1, _ := bannedUserMap.GetOrInsert(id, unsafe.Pointer(&defaultValue))
 		userFailures = (*int64)(p1)
-		p2, ok := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
-		if !ok {
-			panic("")
-		}
+		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
 		ipFailures = (*int64)(p2)
 
 		if succeeded {
