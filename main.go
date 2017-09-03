@@ -9,12 +9,18 @@ import (
 	"github.com/martini-contrib/sessions"
 	"net/http"
 	"strconv"
+	"github.com/go-redis/redis"
 )
 
 var db *sql.DB
 var (
 	UserLockThreshold int
 	IPBanThreshold    int
+)
+
+var (
+	IPCount *redis.Client
+	LoginCount *redis.Client
 )
 
 func init() {
@@ -33,6 +39,18 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
+
+	IPCount = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+		Password: "",
+		DB: 0,
+	})
+
+	LoginCount = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+		Password: "",
+		DB: 1,
+	})
 
 	UserLockThreshold, err = strconv.Atoi(getEnv("ISU4_USER_LOCK_THRESHOLD", "3"))
 	if err != nil {

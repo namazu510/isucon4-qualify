@@ -3,7 +3,9 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"github.com/go-redis/redis"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -32,6 +34,30 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 		time.Now(), userId, login, remoteAddr, succ,
 	)
 
+	// redisに回数記録
+	val, err := LoginCount.Get(strconv.Itoa(user.ID)).Result()
+	if err {
+		val = "0"
+	}
+	userCnt, _ := strconv.Atoi(val)
+
+	val, err = IPCount.Get(remoteAddr).Result()
+	if err {
+		val = "0"
+	}
+	ipCnt, _ := strconv.Atoi(val)
+
+	// 成功時に回数0へ
+	if succ == 0 {
+		userCnt += 1
+		ipCnt += 1
+	} else {
+		userCnt = 0
+		ipCnt = 0
+	}
+	LoginCount.Set(strconv.Itoa(user.ID), strconv.Itoa(userCnt), 0)
+	IPCount.Set(remoteAddr, strconv.Itoa(ipCnt), 0)
+
 	return err
 }
 
@@ -40,43 +66,61 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		user.ID, user.ID,
-	)
-	err := row.Scan(&ni)
+	val, err := LoginCount.Get(strconv.Itoa(user.ID)).Result()
+	if err == redis.Nil {
+		// DBから検索
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			user.ID, user.ID,
+		)
+		err := row.Scan(&ni)
 
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
+		switch {
+		case err == sql.ErrNoRows:
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		val = strconv.Itoa(int(ni.Int64))
+		// キャッシュに
+		LoginCount.Set(strconv.Itoa(user.ID), val, 0)
+	} else {
 		return false, err
 	}
-
-	return UserLockThreshold <= int(ni.Int64), nil
+	i, _ := strconv.Atoi(val)
+	return UserLockThreshold <= i, nil
 }
 
 func isBannedIP(ip string) (bool, error) {
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		ip, ip,
-	)
-	err := row.Scan(&ni)
+	val, err := IPCount.Get(ip).Result()
+	if err == redis.Nil {
+		// DBから検索
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			ip, ip,
+		)
+		err := row.Scan(&ni)
 
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
+		switch {
+		case err == sql.ErrNoRows:
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+		val = strconv.Itoa(int(ni.Int64))
+		// キャッシュに
+		IPCount.Set(ip, val, 0)
+	} else {
 		return false, err
 	}
-
-	return IPBanThreshold <= int(ni.Int64), nil
+	i, _ := strconv.Atoi(val)
+	return IPBanThreshold <= i, nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
