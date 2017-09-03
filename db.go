@@ -346,7 +346,7 @@ func lockedUsers() []string {
 func warmCache() {
 	rows, _ := db.Query("select distinct ip from login_log")
 	for rows.Next() {
-		var ip sql.NullString
+		var ip string
 		rows.Scan(&ip)
 
 		var ni sql.NullInt64
@@ -359,10 +359,11 @@ func warmCache() {
 		row.Scan(&ni)
 		bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64))
 	}
+        rows.Close()
 
 	rows, _ = db.Query("select id from user")
 	for rows.Next() {
-		var user sql.NullInt64
+		var user string
 		rows.Scan(&user)
 
 		var ni sql.NullInt64
@@ -375,4 +376,5 @@ func warmCache() {
 		row.Scan(&ni)
 		bannedUserMap.Insert(user, unsafe.Pointer(&ni.Int64))
 	}
+        rows.Close()
 }
