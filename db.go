@@ -68,8 +68,12 @@ func isLockedUser(user *User) (bool, *int64, error) {
 		}
 
 		if !bannedUserMap.Insert(user.ID, unsafe.Pointer(&ni.Int64)) {
-			p, _ = bannedUserMap.Get(user.ID)
+			// insertに失敗
+			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
+			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
+		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		p, _ = bannedUserMap.Get(user.ID)
 	}
 
 	counter := (*int64)(p)
@@ -97,9 +101,12 @@ func isBannedIP(ip string) (bool, *int64, error) {
 		}
 
 		if !bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64)) {
-			// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
-			p, _ = bannedIPMap.Get(ip)
+			// insertに失敗
+			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
+			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
+		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		p, _ = bannedIPMap.Get(ip)
 	}
 
 	counter := (*int64)(p)
