@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/cornelk/hashmap"
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/martini-contrib/render"
@@ -102,6 +103,13 @@ func main() {
 			"banned_ips":   bannedIPs(),
 			"locked_users": lockedUsers(),
 		})
+	})
+
+	m.Get("/init", func(r render.Render) {
+		bannedIPMap = hashmap.New(IPMapSize)
+		bannedUserMap = hashmap.New(UserMapSize)
+
+		r.Text(200, "")
 	})
 
 	http.ListenAndServe(":8080", m)

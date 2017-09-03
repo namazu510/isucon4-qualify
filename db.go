@@ -4,7 +4,16 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
+	"unsafe"
+
+	"github.com/cornelk/hashmap"
+)
+
+const (
+	IPMapSize   = 5500 * 10
+	UserMapSize = 16000 * 10
 )
 
 var (
@@ -12,6 +21,11 @@ var (
 	ErrLockedUser    = errors.New("Locked user")
 	ErrUserNotFound  = errors.New("Not found user")
 	ErrWrongPassword = errors.New("Wrong password")
+
+	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
+	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
+	bannedIPMap   *hashmap.HashMap
+	bannedUserMap *hashmap.HashMap
 )
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
@@ -40,43 +54,70 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		user.ID, user.ID,
-	)
-	err := row.Scan(&ni)
+	p, exists := bannedUserMap.Get(user.ID)
+	if !exists {
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			user.ID, user.ID,
+		)
+		err := row.Scan(&ni)
 
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
-		return false, err
+		switch {
+		case err == sql.ErrNoRows:
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+
+		if !bannedUserMap.Insert(user.ID, unsafe.Pointer(&ni.Int64)) {
+			// insertに失敗
+			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
+			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
+		}
+		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		p, _ = bannedUserMap.Get(user.ID)
 	}
 
-	return UserLockThreshold <= int(ni.Int64), nil
+	counter := (*int64)(p)
+	c := int(atomic.LoadInt64(counter))
+	return UserLockThreshold <= c, nil
 }
 
 func isBannedIP(ip string) (bool, error) {
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		ip, ip,
-	)
-	err := row.Scan(&ni)
+	p, exists := bannedIPMap.GetStringKey(ip)
+	if !exists {
+		// 存在しない場合は、MySQLのlogin_logテーブルからからログイン失敗回数を求める
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			ip, ip,
+		)
+		err := row.Scan(&ni)
 
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
-		return false, err
+		switch {
+		case err == sql.ErrNoRows:
+			return false, nil
+		case err != nil:
+			return false, err
+		}
+
+		if !bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64)) {
+			// insertに失敗
+			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
+			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
+		}
+		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		p, _ = bannedIPMap.Get(ip)
 	}
 
-	return IPBanThreshold <= int(ni.Int64), nil
+	counter := (*int64)(p)
+	c := int(atomic.LoadInt64(counter))
+	return IPBanThreshold <= int(c), nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
@@ -92,7 +133,32 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	defer func() {
+		var dummy int64
+		var userFailures, ipFailures *int64
+
 		createLoginLog(succeeded, remoteAddr, loginName, user)
+		p1, ok := bannedUserMap.Get(user.ID)
+		if ok {
+			userFailures = (*int64)(p1)
+		} else {
+			userFailures = &dummy
+		}
+		p2, ok := bannedIPMap.GetStringKey(remoteAddr)
+		if ok {
+			ipFailures = (*int64)(p2)
+		} else {
+			ipFailures = &dummy
+		}
+
+		if succeeded {
+			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
+			}
+			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
+			}
+		} else {
+			atomic.AddInt64(userFailures, 1)
+			atomic.AddInt64(ipFailures, 1)
+		}
 	}()
 
 	row := db.QueryRow(
