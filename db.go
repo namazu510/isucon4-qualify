@@ -4,7 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
+	"unsafe"
+
+	"github.com/cornelk/hashmap"
 )
 
 var (
@@ -12,6 +16,11 @@ var (
 	ErrLockedUser    = errors.New("Locked user")
 	ErrUserNotFound  = errors.New("Not found user")
 	ErrWrongPassword = errors.New("Wrong password")
+
+	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
+	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
+	bannedIPMap   = hashmap.New(5500 * 10)
+	bannedUserMap = hashmap.New(16000 * 10)
 )
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
@@ -35,48 +44,66 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 	return err
 }
 
-func isLockedUser(user *User) (bool, error) {
+func isLockedUser(user *User) (bool, *int64, error) {
 	if user == nil {
-		return false, nil
+		return false, nil, nil
 	}
 
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		user.ID, user.ID,
-	)
-	err := row.Scan(&ni)
+	p, exists := bannedUserMap.Get(user.ID)
+	if !exists {
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			user.ID, user.ID,
+		)
+		err := row.Scan(&ni)
 
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
-		return false, err
+		switch {
+		case err == sql.ErrNoRows:
+			return false, nil, nil
+		case err != nil:
+			return false, nil, err
+		}
+
+		if !bannedUserMap.Insert(user.ID, unsafe.Pointer(&ni.Int64)) {
+			p, _ = bannedUserMap.Get(user.ID)
+		}
 	}
 
-	return UserLockThreshold <= int(ni.Int64), nil
+	counter := (*int64)(p)
+	return UserLockThreshold <= int(atomic.LoadInt64(counter)), counter, nil
 }
 
-func isBannedIP(ip string) (bool, error) {
-	var ni sql.NullInt64
-	row := db.QueryRow(
-		"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-			"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
-			"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-		ip, ip,
-	)
-	err := row.Scan(&ni)
+func isBannedIP(ip string) (bool, *int64, error) {
+	p, exists := bannedIPMap.GetStringKey(ip)
+	if !exists {
+		// 存在しない場合は、MySQLのlogin_logテーブルからからログイン失敗回数を求める
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			ip, ip,
+		)
+		err := row.Scan(&ni)
 
-	switch {
-	case err == sql.ErrNoRows:
-		return false, nil
-	case err != nil:
-		return false, err
+		switch {
+		case err == sql.ErrNoRows:
+			return false, nil, nil
+		case err != nil:
+			return false, nil, err
+		}
+
+		if !bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64)) {
+			// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+			p, _ = bannedIPMap.Get(ip)
+		}
 	}
 
-	return IPBanThreshold <= int(ni.Int64), nil
+	counter := (*int64)(p)
+	return IPBanThreshold <= int(atomic.LoadInt64(counter)), counter, nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
@@ -108,11 +135,13 @@ func attemptLogin(req *http.Request) (*User, error) {
 		return nil, err
 	}
 
-	if banned, _ := isBannedIP(remoteAddr); banned {
+	if banned, failures, _ := isBannedIP(remoteAddr); banned {
+		atomic.AddInt64(failures, 1)
 		return nil, ErrBannedIP
 	}
 
-	if locked, _ := isLockedUser(user); locked {
+	if locked, failures, _ := isLockedUser(user); locked {
+		atomic.AddInt64(failures, 1)
 		return nil, ErrLockedUser
 	}
 
