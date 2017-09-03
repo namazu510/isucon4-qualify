@@ -3,12 +3,11 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"github.com/cornelk/hashmap"
 	"net/http"
 	"sync/atomic"
 	"time"
 	"unsafe"
-
-	"github.com/cornelk/hashmap"
 )
 
 const (
@@ -344,37 +343,40 @@ func lockedUsers() []string {
 }
 
 func warmCache() {
-	rows, _ := db.Query("select distinct ip from login_log")
+	rows, _ := db.Query(
+		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
+	)
 	for rows.Next() {
 		var ip string
-		rows.Scan(&ip)
+		var id string
+		var succeeded bool
+		rows.Scan(&id, &ip, &succeeded)
 
-		var ni sql.NullInt64
-		row := db.QueryRow(
-			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-				"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
-				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-			ip, ip,
-		)
-		row.Scan(&ni)
-		bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64))
+		var dummy int64
+		var userFailures, ipFailures *int64
+
+		p1, ok := bannedUserMap.Get(id)
+		if ok {
+			userFailures = (*int64)(p1)
+		} else {
+			userFailures = &dummy
+		}
+		p2, ok := bannedIPMap.GetStringKey(ip)
+		if ok {
+			ipFailures = (*int64)(p2)
+		} else {
+			ipFailures = &dummy
+		}
+
+		if succeeded {
+			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
+			}
+			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
+			}
+		} else {
+			atomic.AddInt64(userFailures, 1)
+			atomic.AddInt64(ipFailures, 1)
+		}
 	}
-        rows.Close()
 
-	rows, _ = db.Query("select id from user")
-	for rows.Next() {
-		var user string
-		rows.Scan(&user)
-
-		var ni sql.NullInt64
-		row := db.QueryRow(
-			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-				"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
-				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-			user, user,
-		)
-		row.Scan(&ni)
-		bannedUserMap.Insert(user, unsafe.Pointer(&ni.Int64))
-	}
-        rows.Close()
 }
