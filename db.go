@@ -342,3 +342,37 @@ func lockedUsers() []string {
 
 	return userIds
 }
+
+func warmCache() {
+	rows, _ := db.Query("select distinct ip from login_log")
+	for rows.Next() {
+		var ip sql.NullString
+		rows.Scan(&ip)
+
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			ip, ip,
+		)
+		row.Scan(&ni)
+		bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64))
+	}
+
+	rows, _ = db.Query("select id from user")
+	for rows.Next() {
+		var user sql.NullInt64
+		rows.Scan(&user)
+
+		var ni sql.NullInt64
+		row := db.QueryRow(
+			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
+				"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
+				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
+			user, user,
+		)
+		row.Scan(&ni)
+		bannedUserMap.Insert(user, unsafe.Pointer(&ni.Int64))
+	}
+}

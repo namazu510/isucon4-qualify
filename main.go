@@ -108,9 +108,8 @@ func main() {
 	m.Get("/init", func(r render.Render) {
 		bannedIPMap = hashmap.New(IPMapSize)
 		bannedUserMap = hashmap.New(UserMapSize)
-
+		warmCache()
 		r.Text(200, "")
 	})
-
 	http.ListenAndServe(":8080", m)
 }
