@@ -3,12 +3,13 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"net/http"
+	"strconv"
+
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/martini-contrib/render"
 	"github.com/martini-contrib/sessions"
-	"net/http"
-	"strconv"
 )
 
 var db *sql.DB
