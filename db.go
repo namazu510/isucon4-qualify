@@ -128,7 +128,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 	password := req.PostFormValue("password")
 	user, ok := userMap[loginName]
 	if !ok {
-		user = nil
+		user = &User{}
 	}
 
 	remoteAddr := req.RemoteAddr
