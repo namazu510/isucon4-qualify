@@ -104,5 +104,16 @@ func main() {
 		})
 	})
 
+	m.Get("/init", func(r render.Render) {
+		for key := range bannedIPMap.Iter() {
+			bannedIPMap.Del(key)
+		}
+		for key := range bannedUserMap.Iter() {
+			bannedUserMap.Del(key)
+		}
+
+		r.Text(200, "")
+	})
+
 	http.ListenAndServe(":8080", m)
 }
