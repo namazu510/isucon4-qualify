@@ -26,6 +26,8 @@ var (
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
 	bannedIPMap   *hashmap.HashMap
 	bannedUserMap *hashmap.HashMap
+
+	userMap = map[string]*User{}
 )
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
@@ -122,10 +124,12 @@ func isBannedIP(ip string) (bool, error) {
 
 func attemptLogin(req *http.Request) (*User, error) {
 	succeeded := false
-	user := &User{}
-
 	loginName := req.PostFormValue("login")
 	password := req.PostFormValue("password")
+	user, ok := userMap[loginName]
+	if !ok {
+		user = nil
+	}
 
 	remoteAddr := req.RemoteAddr
 	if xForwardedFor := req.Header.Get("X-Forwarded-For"); len(xForwardedFor) > 0 {
@@ -160,19 +164,6 @@ func attemptLogin(req *http.Request) (*User, error) {
 			atomic.AddInt64(ipFailures, 1)
 		}
 	}()
-
-	row := db.QueryRow(
-		"SELECT id, login, password_hash, salt FROM users WHERE login = ?",
-		loginName,
-	)
-	err := row.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-
-	switch {
-	case err == sql.ErrNoRows:
-		user = nil
-	case err != nil:
-		return nil, err
-	}
 
 	if banned, _ := isBannedIP(remoteAddr); banned {
 		return nil, ErrBannedIP
@@ -345,6 +336,18 @@ func lockedUsers() []string {
 
 func warmCache() {
 	rows, _ := db.Query(
+		"SELECT id, login, password_hash salt from users",
+	)
+	for rows.Next() {
+		user := &User{}
+		rows.Scan(user.ID, user.Login, user.PasswordHash, user.Salt)
+		userMap[user.Login] = user
+
+		var defaultValue int64 = 0
+		bannedUserMap.GetOrInsert(user.ID, unsafe.Pointer(&defaultValue))
+	}
+
+	rows, _ = db.Query(
 		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
 	for rows.Next() {
@@ -375,5 +378,4 @@ func warmCache() {
 			atomic.AddInt64(ipFailures, 1)
 		}
 	}
-
 }
