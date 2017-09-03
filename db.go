@@ -24,8 +24,8 @@ var (
 	ErrUserNotFound  = errors.New("Not found user")
 	ErrWrongPassword = errors.New("Wrong password")
 
-	bannedIPMap   *hashmap.HashMap
-	bannedUserMap *hashmap.HashMap
+	bannedIPMap   = hashmap.New(IPMapSize)
+	bannedUserMap = hashmap.New(UserMapSize)
 )
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
