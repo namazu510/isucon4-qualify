@@ -106,10 +106,10 @@ func main() {
 
 	m.Get("/init", func(r render.Render) {
 		for key := range bannedIPMap.Iter() {
-			bannedIPMap.Del(key)
+			bannedIPMap.Del(key.Key)
 		}
 		for key := range bannedUserMap.Iter() {
-			bannedUserMap.Del(key)
+			bannedUserMap.Del(key.Key)
 		}
 
 		r.Text(200, "")
