@@ -36,13 +36,13 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 
 	// redisに回数記録
 	val, err := LoginCount.Get(strconv.Itoa(user.ID)).Result()
-	if err {
+	if err != nil {
 		val = "0"
 	}
 	userCnt, _ := strconv.Atoi(val)
 
 	val, err = IPCount.Get(remoteAddr).Result()
-	if err {
+	if err != nil {
 		val = "0"
 	}
 	ipCnt, _ := strconv.Atoi(val)
