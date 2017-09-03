@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	IPMapSize   = 5500 * 10
-	UserMapSize = 16000 * 10
+	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
+	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
+	UserMapSize = 5500 * 10
+	IPMapSize   = 16000 * 10
 )
 
 var (
@@ -22,8 +24,6 @@ var (
 	ErrUserNotFound  = errors.New("Not found user")
 	ErrWrongPassword = errors.New("Wrong password")
 
-	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
-	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
 	bannedIPMap   *hashmap.HashMap
 	bannedUserMap *hashmap.HashMap
 )
