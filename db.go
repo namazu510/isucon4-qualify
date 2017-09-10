@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
+	// 初期状態だと、ユーザIDは約200000、アクセス元IPは約1万6千。
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
-	UserMapSize = 5500 * 10
+	UserMapSize = 200000 * 10
 	IPMapSize   = 16000 * 10
 	InitTimeout = 58 * time.Second
 )
