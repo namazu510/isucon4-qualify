@@ -132,6 +132,14 @@ func attemptLogin(req *http.Request) (*User, error) {
 	user, ok := userMap[loginName]
 	if !ok {
 		user = &User{}
+		rows, _ := db.Query("SELECT id, login, password_hash, salt from users WHERE login = ?", loginName)
+		defer rows.Close()
+		if rows.Next() {
+			rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+			userMap[loginName] = user
+		} else {
+			// do nothing
+		}
 	}
 
 	remoteAddr := req.RemoteAddr
@@ -337,9 +345,7 @@ func lockedUsers() []string {
 	return userIds
 }
 
-func warmCache() {
-	start := time.Now()
-
+func warmCache(timeout time.Time) {
 	rows, _ := db.Query(
 		"SELECT id, login, password_hash, salt from users",
 	)
@@ -351,7 +357,7 @@ func warmCache() {
 		var defaultValue int64 = 0
 		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
 
-		if time.Since(start) > InitTimeout {
+		if time.Now().After(timeout) {
 			return
 		}
 	}
@@ -383,7 +389,7 @@ func warmCache() {
 			atomic.AddInt64(ipFailures, 1)
 		}
 
-		if time.Since(start) > InitTimeout {
+		if time.Now().After(timeout) {
 			return
 		}
 	}
