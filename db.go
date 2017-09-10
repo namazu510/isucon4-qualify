@@ -199,6 +199,11 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	succeeded = true
+	user.LastLogin = &LastLogin{}
+	user.LastLogin.Login = loginName
+	user.LastLogin.IP = remoteAddr
+	user.LastLogin.CreatedAt = time.Now()
+
 	return user, nil
 }
 
