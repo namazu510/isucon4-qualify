@@ -203,6 +203,9 @@ func attemptLogin(req *http.Request) (*User, error) {
 }
 
 func getCurrentUser(login interface{}) *User {
+	if login == nil {
+		return nil
+	}
 	user, ok := userMap[login.(string)]
 	if !ok {
 		return nil
