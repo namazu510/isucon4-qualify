@@ -338,11 +338,11 @@ func lockedUsers() []string {
 
 func warmCache() {
 	rows, _ := db.Query(
-		"SELECT id, login, password_hash salt from users",
+		"SELECT id, login, password_hash, salt from users",
 	)
 	for rows.Next() {
 		user := &User{}
-		rows.Scan(user.ID, user.Login, user.PasswordHash, user.Salt)
+		rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
 		userMap[user.Login] = user
 
 		var defaultValue int64 = 0
