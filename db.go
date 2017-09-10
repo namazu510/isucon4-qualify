@@ -16,6 +16,7 @@ const (
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
 	UserMapSize = 5500 * 10
 	IPMapSize   = 16000 * 10
+	InitTimeout = 58 * time.Second
 )
 
 var (
@@ -337,6 +338,8 @@ func lockedUsers() []string {
 }
 
 func warmCache() {
+	start := time.Now()
+
 	rows, _ := db.Query(
 		"SELECT id, login, password_hash, salt from users",
 	)
@@ -347,6 +350,10 @@ func warmCache() {
 
 		var defaultValue int64 = 0
 		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+
+		if time.Since(start) > InitTimeout {
+			return
+		}
 	}
 
 	rows, _ = db.Query(
@@ -374,6 +381,10 @@ func warmCache() {
 		} else {
 			atomic.AddInt64(userFailures, 1)
 			atomic.AddInt64(ipFailures, 1)
+		}
+
+		if time.Since(start) > InitTimeout {
+			return
 		}
 	}
 }
