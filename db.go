@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	IPMapSize   = 5500 * 10
-	UserMapSize = 16000 * 10
+	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
+	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
+	UserMapSize = 5500 * 10
+	IPMapSize   = 16000 * 10
 )
 
 var (
@@ -24,8 +26,8 @@ var (
 
 	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
-	bannedIPMap   *hashmap.HashMap
-	bannedUserMap *hashmap.HashMap
+	bannedIPMap   = hashmap.New(IPMapSize)
+	bannedUserMap = hashmap.New(UserMapSize)
 
 	userMap = map[string]*User{}
 )
@@ -79,7 +81,7 @@ func isLockedUser(user *User) (bool, error) {
 			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
 			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
-		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		// キーを削除しないため、bannedUserMap.Get()は必ず成功する
 		p, _ = bannedUserMap.Get(user.Login)
 	}
 
@@ -113,7 +115,7 @@ func isBannedIP(ip string) (bool, error) {
 			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
 			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
-		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
+		// キーを削除しないため、bannedIPMap.Get()は必ず成功する
 		p, _ = bannedIPMap.Get(ip)
 	}
 
