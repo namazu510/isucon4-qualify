@@ -94,6 +94,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 			userMap[loginName] = user
 		} else {
 			// do nothing
+			user = nil
 		}
 	}
 
@@ -108,7 +109,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
-		p1, _ := bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+		p1, _ := bannedUserMap.GetOrInsert(loginName, unsafe.Pointer(&defaultValue))
 		userFailures = (*int64)(p1)
 		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(&defaultValue))
 		ipFailures = (*int64)(p2)
