@@ -354,8 +354,8 @@ func warmCache(timeout time.Time) {
 		rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
 		userMap[user.Login] = user
 
-		var defaultValue int64 = 0
-		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+		var defaultValue *int64 = new(int64)
+		bannedUserMapRO[user.Login] = defaultValue
 
 		if time.Now().After(timeout) {
 			return
@@ -371,12 +371,13 @@ func warmCache(timeout time.Time) {
 		var succeeded bool
 		rows.Scan(&login, &ip, &succeeded)
 
-		var defaultValue int64 = 0
+		var defaultValue1 *int64 = new(int64)
+		var defaultValue2 *int64 = new(int64)
 		var userFailures, ipFailures *int64
 
-		p1, _ := bannedUserMap.GetOrInsert(login, unsafe.Pointer(&defaultValue))
+		p1, _ := bannedUserMap.GetOrInsert(login, unsafe.Pointer(defaultValue1))
 		userFailures = (*int64)(p1)
-		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
+		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(defaultValue2))
 		ipFailures = (*int64)(p2)
 
 		if succeeded {
