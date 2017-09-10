@@ -128,6 +128,7 @@ func main() {
 
 		bannedIPMap = hashmap.New(IPMapSize)
 		bannedUserMap = hashmap.New(UserMapSize)
+		bannedUserMapRO = make(map[string]*int64)
 		warmCache(start.Add(InitTimeout))
 		r.Text(200, "")
 	})
