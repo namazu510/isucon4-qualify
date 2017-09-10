@@ -14,7 +14,7 @@ import (
 const (
 	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
-	UserMapSize = 5500 * 10
+	UserMapSize = 2000000 * 10
 	IPMapSize   = 16000 * 10
 	InitTimeout = 58 * time.Second
 )
@@ -61,29 +61,7 @@ func isLockedUser(user *User) (bool, error) {
 
 	p, exists := bannedUserMap.Get(user.Login)
 	if !exists {
-		var ni sql.NullInt64
-		row := db.QueryRow(
-			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-				"user_id = ? AND id > IFNULL((select id from login_log where user_id = ? AND "+
-				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-			user.ID, user.ID,
-		)
-		err := row.Scan(&ni)
-
-		switch {
-		case err == sql.ErrNoRows:
-			return false, nil
-		case err != nil:
-			return false, err
-		}
-
-		if !bannedUserMap.Insert(user.Login, unsafe.Pointer(&ni.Int64)) {
-			// insertに失敗
-			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
-			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
-		}
-		// キーを削除しないため、bannedUserMap.Get()は必ず成功する
-		p, _ = bannedUserMap.Get(user.Login)
+		return false, nil
 	}
 
 	counter := (*int64)(p)
@@ -94,30 +72,7 @@ func isLockedUser(user *User) (bool, error) {
 func isBannedIP(ip string) (bool, error) {
 	p, exists := bannedIPMap.GetStringKey(ip)
 	if !exists {
-		// 存在しない場合は、MySQLのlogin_logテーブルからからログイン失敗回数を求める
-		var ni sql.NullInt64
-		row := db.QueryRow(
-			"SELECT COUNT(1) AS failures FROM login_log WHERE "+
-				"ip = ? AND id > IFNULL((select id from login_log where ip = ? AND "+
-				"succeeded = 1 ORDER BY id DESC LIMIT 1), 0);",
-			ip, ip,
-		)
-		err := row.Scan(&ni)
-
-		switch {
-		case err == sql.ErrNoRows:
-			return false, nil
-		case err != nil:
-			return false, err
-		}
-
-		if !bannedIPMap.Insert(ip, unsafe.Pointer(&ni.Int64)) {
-			// insertに失敗
-			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
-			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
-		}
-		// キーを削除しないため、bannedIPMap.Get()は必ず成功する
-		p, _ = bannedIPMap.Get(ip)
+		return false, nil
 	}
 
 	counter := (*int64)(p)
@@ -148,22 +103,15 @@ func attemptLogin(req *http.Request) (*User, error) {
 	}
 
 	defer func() {
-		var dummy int64
+		createLoginLog(succeeded, remoteAddr, loginName, user)
+
+		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
-		createLoginLog(succeeded, remoteAddr, loginName, user)
-		p1, ok := bannedUserMap.Get(user.Login)
-		if ok {
-			userFailures = (*int64)(p1)
-		} else {
-			userFailures = &dummy
-		}
-		p2, ok := bannedIPMap.GetStringKey(remoteAddr)
-		if ok {
-			ipFailures = (*int64)(p2)
-		} else {
-			ipFailures = &dummy
-		}
+		p1, _ := bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+		userFailures = (*int64)(p1)
+		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(&defaultValue))
+		ipFailures = (*int64)(p2)
 
 		if succeeded {
 			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
@@ -346,23 +294,23 @@ func lockedUsers() []string {
 }
 
 func warmCache(timeout time.Time) {
+	//rows, _ := db.Query(
+	//	"SELECT id, login, password_hash, salt from users",
+	//)
+	//for rows.Next() {
+	//	user := &User{}
+	//	rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+	//	userMap[user.Login] = user
+	//
+	//	var defaultValue int64 = 0
+	//	bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+	//
+	//	if time.Now().After(timeout) {
+	//		return
+	//	}
+	//}
+
 	rows, _ := db.Query(
-		"SELECT id, login, password_hash, salt from users",
-	)
-	for rows.Next() {
-		user := &User{}
-		rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-		userMap[user.Login] = user
-
-		var defaultValue int64 = 0
-		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
-
-		if time.Now().After(timeout) {
-			return
-		}
-	}
-
-	rows, _ = db.Query(
 		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
 	for rows.Next() {
