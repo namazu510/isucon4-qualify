@@ -81,12 +81,12 @@ func main() {
 			return
 		}
 
-		session.Set("user_id", strconv.Itoa(user.ID))
+		session.Set("user_name", user.Login)
 		r.Redirect("/mypage")
 	})
 
 	m.Get("/mypage", func(r render.Render, session sessions.Session) {
-		currentUser := getCurrentUser(session.Get("user_id"))
+		currentUser := getCurrentUser(session.Get("user_name"))
 
 		if currentUser == nil {
 			session.Set("notice", "You must be logged in")

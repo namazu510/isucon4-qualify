@@ -129,9 +129,23 @@ func attemptLogin(req *http.Request) (*User, error) {
 	succeeded := false
 	loginName := req.PostFormValue("login")
 	password := req.PostFormValue("password")
+
 	user, ok := userMap[loginName]
 	if !ok {
 		user = &User{}
+		row := db.QueryRow(
+			"SELECT id, login, password_hash, salt FROM users WHERE login = ?",
+			loginName,
+		)
+		err := row.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+
+		switch {
+		case err == sql.ErrNoRows:
+			user = nil
+		case err != nil:
+			return nil, err
+		}
+		userMap[loginName] = user
 	}
 
 	remoteAddr := req.RemoteAddr
@@ -188,18 +202,11 @@ func attemptLogin(req *http.Request) (*User, error) {
 	return user, nil
 }
 
-func getCurrentUser(userId interface{}) *User {
-	user := &User{}
-	row := db.QueryRow(
-		"SELECT id, login, password_hash, salt FROM users WHERE id = ?",
-		userId,
-	)
-	err := row.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-
-	if err != nil {
+func getCurrentUser(login interface{}) *User {
+	user, ok := userMap[login.(string)]
+	if !ok {
 		return nil
 	}
-
 	return user
 }
 
@@ -338,25 +345,8 @@ func lockedUsers() []string {
 }
 
 func warmCache() {
-	start := time.Now()
-
+	// start := time.Now()
 	rows, _ := db.Query(
-		"SELECT id, login, password_hash, salt from users",
-	)
-	for rows.Next() {
-		user := &User{}
-		rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-		userMap[user.Login] = user
-
-		var defaultValue int64 = 0
-		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
-
-		if time.Since(start) > InitTimeout {
-			return
-		}
-	}
-
-	rows, _ = db.Query(
 		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
 	for rows.Next() {
@@ -382,9 +372,21 @@ func warmCache() {
 			atomic.AddInt64(userFailures, 1)
 			atomic.AddInt64(ipFailures, 1)
 		}
-
-		if time.Since(start) > InitTimeout {
-			return
-		}
 	}
+
+	//rows, _ = db.Query(
+	//	"SELECT id, login, password_hash, salt from users",
+	//)
+	//for rows.Next() {
+	//	user := &User{}
+	//	rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+	//	userMap[user.Login] = user
+	//
+	//	var defaultValue int64 = 0
+	//	bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+	//
+	//	if time.Since(start) > InitTimeout {
+	//		return
+	//	}
+	//}
 }
