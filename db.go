@@ -56,7 +56,7 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	p, exists := bannedUserMap.Get(user.ID)
+	p, exists := bannedUserMap.Get(user.Login)
 	if !exists {
 		var ni sql.NullInt64
 		row := db.QueryRow(
@@ -74,13 +74,13 @@ func isLockedUser(user *User) (bool, error) {
 			return false, err
 		}
 
-		if !bannedUserMap.Insert(user.ID, unsafe.Pointer(&ni.Int64)) {
+		if !bannedUserMap.Insert(user.Login, unsafe.Pointer(&ni.Int64)) {
 			// insertに失敗
 			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
 			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
 		// hmapのキーを削除しないため、bannedIPs.Get()は必ず成功する
-		p, _ = bannedUserMap.Get(user.ID)
+		p, _ = bannedUserMap.Get(user.Login)
 	}
 
 	counter := (*int64)(p)
@@ -141,7 +141,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 		var userFailures, ipFailures *int64
 
 		createLoginLog(succeeded, remoteAddr, loginName, user)
-		p1, ok := bannedUserMap.Get(user.ID)
+		p1, ok := bannedUserMap.Get(user.Login)
 		if ok {
 			userFailures = (*int64)(p1)
 		} else {
@@ -344,7 +344,7 @@ func warmCache() {
 		userMap[user.Login] = user
 
 		var defaultValue int64 = 0
-		bannedUserMap.GetOrInsert(user.ID, unsafe.Pointer(&defaultValue))
+		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
 	}
 
 	rows, _ = db.Query(
@@ -358,12 +358,8 @@ func warmCache() {
 
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
-		userID, ok := userMap[login]
-		if !ok {
-			panic("")
-		}
 
-		p1, _ := bannedUserMap.GetOrInsert(userID, unsafe.Pointer(&defaultValue))
+		p1, _ := bannedUserMap.GetOrInsert(login, unsafe.Pointer(&defaultValue))
 		userFailures = (*int64)(p1)
 		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
 		ipFailures = (*int64)(p2)
