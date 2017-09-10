@@ -16,6 +16,7 @@ const (
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
 	UserMapSize = 5500 * 10
 	IPMapSize   = 16000 * 10
+	InitTimeout = 58 * time.Second
 )
 
 var (
@@ -24,8 +25,12 @@ var (
 	ErrUserNotFound  = errors.New("Not found user")
 	ErrWrongPassword = errors.New("Wrong password")
 
+	// 初期状態だと、ユーザIDは約5500、アクセス元IPは約1万6千。
+	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
 	bannedIPMap   = hashmap.New(IPMapSize)
 	bannedUserMap = hashmap.New(UserMapSize)
+
+	userMap = map[string]*User{}
 )
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
@@ -54,7 +59,7 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	p, exists := bannedUserMap.Get(user.ID)
+	p, exists := bannedUserMap.Get(user.Login)
 	if !exists {
 		var ni sql.NullInt64
 		row := db.QueryRow(
@@ -72,13 +77,13 @@ func isLockedUser(user *User) (bool, error) {
 			return false, err
 		}
 
-		if !bannedUserMap.Insert(user.ID, unsafe.Pointer(&ni.Int64)) {
+		if !bannedUserMap.Insert(user.Login, unsafe.Pointer(&ni.Int64)) {
 			// insertに失敗
 			// 別のスレッドでクエリの実行が完了しているため、リトライ処理をする必要はない。
 			// そのため、今回DBから集計した結果(ni.Int64)は破棄する。
 		}
 		// キーを削除しないため、bannedUserMap.Get()は必ず成功する
-		p, _ = bannedUserMap.Get(user.ID)
+		p, _ = bannedUserMap.Get(user.Login)
 	}
 
 	counter := (*int64)(p)
@@ -122,10 +127,20 @@ func isBannedIP(ip string) (bool, error) {
 
 func attemptLogin(req *http.Request) (*User, error) {
 	succeeded := false
-	user := &User{}
-
 	loginName := req.PostFormValue("login")
 	password := req.PostFormValue("password")
+	user, ok := userMap[loginName]
+	if !ok {
+		user = &User{}
+		rows, _ := db.Query("SELECT id, login, password_hash, salt from users WHERE login = ?", loginName)
+		defer rows.Close()
+		if rows.Next() {
+			rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+			userMap[loginName] = user
+		} else {
+			// do nothing
+		}
+	}
 
 	remoteAddr := req.RemoteAddr
 	if xForwardedFor := req.Header.Get("X-Forwarded-For"); len(xForwardedFor) > 0 {
@@ -137,7 +152,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 		var userFailures, ipFailures *int64
 
 		createLoginLog(succeeded, remoteAddr, loginName, user)
-		p1, ok := bannedUserMap.Get(user.ID)
+		p1, ok := bannedUserMap.Get(user.Login)
 		if ok {
 			userFailures = (*int64)(p1)
 		} else {
@@ -160,19 +175,6 @@ func attemptLogin(req *http.Request) (*User, error) {
 			atomic.AddInt64(ipFailures, 1)
 		}
 	}()
-
-	row := db.QueryRow(
-		"SELECT id, login, password_hash, salt FROM users WHERE login = ?",
-		loginName,
-	)
-	err := row.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-
-	switch {
-	case err == sql.ErrNoRows:
-		user = nil
-	case err != nil:
-		return nil, err
-	}
 
 	if banned, _ := isBannedIP(remoteAddr); banned {
 		return nil, ErrBannedIP
@@ -341,4 +343,54 @@ func lockedUsers() []string {
 	}
 
 	return userIds
+}
+
+func warmCache(timeout time.Time) {
+	rows, _ := db.Query(
+		"SELECT id, login, password_hash, salt from users",
+	)
+	for rows.Next() {
+		user := &User{}
+		rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+		userMap[user.Login] = user
+
+		var defaultValue int64 = 0
+		bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
+
+		if time.Now().After(timeout) {
+			return
+		}
+	}
+
+	rows, _ = db.Query(
+		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
+	)
+	for rows.Next() {
+		var ip string
+		var login string
+		var succeeded bool
+		rows.Scan(&login, &ip, &succeeded)
+
+		var defaultValue int64 = 0
+		var userFailures, ipFailures *int64
+
+		p1, _ := bannedUserMap.GetOrInsert(login, unsafe.Pointer(&defaultValue))
+		userFailures = (*int64)(p1)
+		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
+		ipFailures = (*int64)(p2)
+
+		if succeeded {
+			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
+			}
+			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
+			}
+		} else {
+			atomic.AddInt64(userFailures, 1)
+			atomic.AddInt64(ipFailures, 1)
+		}
+
+		if time.Now().After(timeout) {
+			return
+		}
+	}
 }

@@ -6,6 +6,11 @@ import (
 	"net/http"
 	"strconv"
 
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
 	"github.com/cornelk/hashmap"
 	"github.com/go-martini/martini"
 	_ "github.com/go-sql-driver/mysql"
@@ -106,11 +111,25 @@ func main() {
 	})
 
 	m.Get("/init", func(r render.Render) {
+		start := time.Now()
+
+		// exeファイルと同じディレクトリにある "init-db.sh" を実行する
+		exefile, err := os.Executable()
+		if err != nil {
+			panic(err)
+		}
+		os.Chdir(filepath.Dir(exefile))
+		cmd := exec.Command("./init-db.sh")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			panic(err)
+		}
+
 		bannedIPMap = hashmap.New(IPMapSize)
 		bannedUserMap = hashmap.New(UserMapSize)
-
+		warmCache(start.Add(InitTimeout))
 		r.Text(200, "")
 	})
-
 	http.ListenAndServe(":8080", m)
 }
