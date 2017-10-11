@@ -322,7 +322,7 @@ func lockedUsers() []string {
 
 func warmCache(timeout time.Time) {
 	rows, _ := db.Query(
-		"SELECT id, ip , succeeded FROM login_log ORDER BY id ASC",
+		"SELECT user_id, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
 	for rows.Next() {
 		var ip string
