@@ -6,6 +6,7 @@ import (
 	"github.com/cornelk/hashmap"
 	"net/http"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -30,7 +31,8 @@ var (
 	bannedIPMap   = hashmap.New(IPMapSize)
 	bannedUserMap = hashmap.New(UserMapSize)
 
-	userMap = map[string]*User{}
+	userMap     = map[string]*User{}
+	userMapLock = sync.RWMutex{}
 )
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
@@ -86,18 +88,29 @@ func attemptLogin(req *http.Request) (*User, error) {
 	succeeded := false
 	loginName := req.PostFormValue("login")
 	password := req.PostFormValue("password")
+
+	userMapLock.RLock()
 	user, ok := userMap[loginName]
+	userMapLock.RUnlock()
 	if !ok {
-		user = &User{}
-		rows, _ := db.Query("SELECT id, login, password_hash, salt from users WHERE login = ?", loginName)
-		defer rows.Close()
-		if rows.Next() {
-			rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-			userMap[loginName] = user
+		userMapLock.Lock()
+		user, ok = userMap[loginName]
+		if !ok {
+			user = &User{}
+			rows, _ := db.Query("SELECT id, login, password_hash, salt from users WHERE login = ?", loginName)
+			defer rows.Close()
+			if rows.Next() {
+				rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+				userMap[loginName] = user
+			} else {
+				// do nothing
+				user = nil
+			}
 		} else {
-			// do nothing
-			user = nil
+			// 排他ロックを獲得待ちしている間に、他のスレッドによってuserMapに追加された。
+			// このスレッドでは何も行わない
 		}
+		userMapLock.Unlock()
 	}
 
 	remoteAddr := req.RemoteAddr
@@ -306,6 +319,15 @@ func lockedUsers() []string {
 
 func warmCache(timeout time.Time) {
 	rows, _ := db.Query(
+		"SELECT id, login, password_hash, salt from users",
+	)
+	for rows.Next() {
+		user := &User{}
+		rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
+		userMap[user.Login] = user
+	}
+
+	rows, _ = db.Query(
 		"SELECT user_id, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
 	for rows.Next() {
