@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"sync"
 	"time"
 )
 
@@ -11,6 +13,12 @@ type User struct {
 	Salt         string
 
 	LastLogin *LastLogin
+	lock      sync.RWMutex
+
+	// NOTE: atomicパッケージを用いた場合、LastLoginを直接書き換えることが出来ない。
+	//       unsafe.Pointerを型変換して使用する必要があるが、その場合テンプレートのレンダリングが不便になる。
+	//       このような理由から、LastLoginの更新はlockを使った実装にした。
+	//LastLoginPtr unsafe.Pointer
 }
 
 type LastLogin struct {
@@ -19,25 +27,16 @@ type LastLogin struct {
 	CreatedAt time.Time
 }
 
+type CreateLoginLogArgs struct {
+	CreateAt  time.Time
+	UserId    sql.NullInt64
+	Login     string
+	IP        string
+	Successed int
+}
+
 func (u *User) getLastLogin() *LastLogin {
-	rows, err := db.Query(
-		"SELECT login, ip, created_at FROM login_log WHERE succeeded = 1 AND user_id = ? ORDER BY id DESC LIMIT 2",
-		u.ID,
-	)
-
-	if err != nil {
-		return nil
-	}
-
-	defer rows.Close()
-	for rows.Next() {
-		u.LastLogin = &LastLogin{}
-		err = rows.Scan(&u.LastLogin.Login, &u.LastLogin.IP, &u.LastLogin.CreatedAt)
-		if err != nil {
-			u.LastLogin = nil
-			return nil
-		}
-	}
-
+	u.lock.RLock()
+	defer u.lock.RUnlock()
 	return u.LastLogin
 }

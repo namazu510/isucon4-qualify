@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/cornelk/hashmap"
+	"sync"
 )
 
 const (
@@ -17,6 +18,8 @@ const (
 	UserMapSize = 200000 * 10
 	IPMapSize   = 16000 * 10
 	InitTimeout = 58 * time.Second
+
+	LoginLogBufferSize = 10000
 )
 
 var (
@@ -31,8 +34,62 @@ var (
 	bannedUserMap   = hashmap.New(UserMapSize)
 	bannedUserMapRO = make(map[string]*int64)
 
-	userMap = map[string]*User{}
+	loginLogBuffer = make(chan *CreateLoginLogArgs, LoginLogBufferSize)
+
+	userMapLock = sync.RWMutex{}
+	userMap     = map[string]*User{} // 更新用。アクセスするときは必ずlockする。
+	userMapRO   = map[string]*User{} // warmCache以外で更新しちゃダメ
 )
+
+// LoginLogへのinsertをバックグラウンドで実行する。
+// この関数は、main関数によって起動される。
+func loginLogWorker() {
+	for args := range loginLogBuffer {
+		if _, err := db.Exec(
+			"INSERT INTO login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) "+
+				"VALUES (?,?,?,?,?)",
+			args.CreateAt, args.UserId, args.Login, args.IP, args.Successed,
+		); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func getUser(loginName string) (user *User, ok bool) {
+	user, ok = userMapRO[loginName]
+	if !ok {
+		userMapLock.RLock()
+		user, ok = userMap[loginName]
+		defer userMapLock.RUnlock()
+	}
+	return
+}
+
+// insertFuncは、追加するUserオブジェクトのポインタを返す。
+func getOrInsertUser(loginName string, insertFunc func() (user *User, ok bool)) (user *User, ok bool) {
+	user, ok = getUser(loginName)
+	if ok {
+		// fast path
+		return
+	} else {
+		// slow path
+		userMapLock.Lock()
+		defer userMapLock.Unlock()
+
+		if user, ok = userMap[loginName]; ok {
+			// 既に指定したユーザが存在している。
+			return
+		}
+
+		user, ok = insertFunc()
+		if !ok {
+			return
+		} else {
+			userMap[loginName] = user
+			return
+		}
+	}
+}
 
 func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error {
 	succ := 0
@@ -46,13 +103,24 @@ func createLoginLog(succeeded bool, remoteAddr, login string, user *User) error 
 		userId.Valid = true
 	}
 
-	_, err := db.Exec(
-		"INSERT INTO login_log (`created_at`, `user_id`, `login`, `ip`, `succeeded`) "+
-			"VALUES (?,?,?,?,?)",
-		time.Now(), userId, login, remoteAddr, succ,
-	)
+	now := time.Now()
 
-	return err
+	// update User.LastLogin
+	if succeeded {
+		// userは呼び出し元で排他ロックされている
+		//user.lock.Lock()
+		//defer user.lock.Unlock()
+		user.LastLogin = &LastLogin{
+			Login:     login,
+			IP:        remoteAddr,
+			CreatedAt: now,
+		}
+	}
+
+	loginLogBuffer <- &CreateLoginLogArgs{
+		now, userId, login, remoteAddr, succ,
+	}
+	return nil
 }
 
 func isLockedUser(user *User) (bool, error) {
@@ -132,18 +200,26 @@ func attemptLogin(req *http.Request) (*User, error) {
 	succeeded := false
 	loginName := req.PostFormValue("login")
 	password := req.PostFormValue("password")
-	user, ok := userMap[loginName]
-	if !ok {
+	user, _ := getOrInsertUser(loginName, func() (user *User, ok bool) {
 		user = &User{}
 		rows, _ := db.Query("SELECT id, login, password_hash, salt from users WHERE login = ?", loginName)
 		defer rows.Close()
 		if rows.Next() {
 			rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-			userMap[loginName] = user
+			ok = true
+			return
 		} else {
 			// do nothing
+			user = nil
+			ok = false
+			return
 		}
-	}
+	})
+	// login処理の処理順序を、ユーザごとリクエスト順に処理する。
+	// createLoginLog()内のLastLoginを更新するタイミングがズレることにより、
+	// ベンチマーク中に最終ログインIPアドレスが異なるというエラーが発生する問題を回避する。
+	user.lock.Lock()
+	defer user.lock.Unlock()
 
 	remoteAddr := req.RemoteAddr
 	if xForwardedFor := req.Header.Get("X-Forwarded-For"); len(xForwardedFor) > 0 {
@@ -203,17 +279,20 @@ func attemptLogin(req *http.Request) (*User, error) {
 }
 
 func getCurrentUser(userId interface{}) *User {
-	user := &User{}
+	var login string
 	row := db.QueryRow(
-		"SELECT id, login, password_hash, salt FROM users WHERE id = ?",
+		"SELECT login FROM users WHERE id = ?",
 		userId,
 	)
-	err := row.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-
+	err := row.Scan(&login)
 	if err != nil {
 		return nil
 	}
 
+	user, ok := getUser(login)
+	if !ok {
+		return nil
+	}
 	return user
 }
 

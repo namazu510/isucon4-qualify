@@ -99,8 +99,14 @@ func main() {
 			return
 		}
 
-		currentUser.getLastLogin()
-		r.HTML(200, "mypage", currentUser)
+		// HTMLのレンダリング中にcurrentUserオブジェクトに更新がかかる可能性がある
+		// コピーを作っておき、レンダリング中に更新されても出力に影響がでないようにする
+		currentUser.lock.RLock()
+		currentUserCopy := *currentUser
+		currentUser.lock.RUnlock()
+
+		//currentUser.getLastLogin()
+		r.HTML(200, "mypage", &currentUserCopy)
 	})
 
 	m.Get("/report", func(r render.Render) {
@@ -132,5 +138,7 @@ func main() {
 		warmCache(start.Add(InitTimeout))
 		r.Text(200, "")
 	})
+
+	go loginLogWorker()
 	http.ListenAndServe(":8080", m)
 }
