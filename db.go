@@ -6,7 +6,6 @@ import (
 	"github.com/cornelk/hashmap"
 	"net/http"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
