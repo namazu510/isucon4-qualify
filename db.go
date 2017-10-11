@@ -3,12 +3,13 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"github.com/cornelk/hashmap"
 	"net/http"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
-	"github.com/cornelk/hashmap"
-	"sync/atomic"
 )
 
 const (
@@ -30,8 +31,8 @@ var (
 	bannedIPMap   = hashmap.New(IPMapSize)
 	bannedUserMap = hashmap.New(UserMapSize)
 
-	bannedIPLock  sync.RWMutex
-	bannedUserLock sync.RWMutex
+	bannedIPLock   = new(sync.RWMutex)
+	bannedUserLock = new(sync.RWMutex)
 
 	userMap = map[string]*User{}
 )
@@ -63,7 +64,7 @@ func isLockedUser(user *User) (bool, error) {
 	}
 
 	bannedUserLock.Lock()
-	p, exists := bannedUserMap.Get(user.Login)
+	p, exists := bannedUserMap.Get(strconv.Itoa(user.ID))
 	if !exists {
 		bannedUserLock.Unlock()
 		return false, nil
@@ -120,13 +121,24 @@ func attemptLogin(req *http.Request) (*User, error) {
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
-		bannedUserLock.Lock()
 		bannedIPLock.Lock()
-		p1, _ := bannedUserMap.GetOrInsert(loginName, unsafe.Pointer(&defaultValue))
-		userFailures = (*int64)(p1)
 		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(&defaultValue))
 		ipFailures = (*int64)(p2)
+		if succeeded {
+			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
+			}
+		} else {
+			atomic.AddInt64(ipFailures, 1)
+		}
+		bannedIPLock.Unlock()
 
+		if user == nil {
+			return
+		}
+
+		bannedUserLock.Lock()
+		p1, _ := bannedUserMap.GetOrInsert(strconv.Itoa(user.ID), unsafe.Pointer(&defaultValue))
+		userFailures = (*int64)(p1)
 		if succeeded {
 			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
 			}
@@ -136,7 +148,6 @@ func attemptLogin(req *http.Request) (*User, error) {
 			atomic.AddInt64(userFailures, 1)
 			atomic.AddInt64(ipFailures, 1)
 		}
-		bannedIPLock.Unlock()
 		bannedUserLock.Unlock()
 	}()
 
@@ -311,18 +322,18 @@ func lockedUsers() []string {
 
 func warmCache(timeout time.Time) {
 	rows, _ := db.Query(
-		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
+		"SELECT id, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
 	for rows.Next() {
 		var ip string
-		var login string
+		var id int64
 		var succeeded bool
-		rows.Scan(&login, &ip, &succeeded)
+		rows.Scan(&id, &ip, &succeeded)
 
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
-		p1, _ := bannedUserMap.GetOrInsert(login, unsafe.Pointer(&defaultValue))
+		p1, _ := bannedUserMap.GetOrInsert(strconv.FormatInt(id, 10), unsafe.Pointer(&defaultValue))
 		userFailures = (*int64)(p1)
 		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue))
 		ipFailures = (*int64)(p2)
