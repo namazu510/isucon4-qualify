@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"sync/atomic"
+	"sync"
 	"time"
 	"unsafe"
-
 	"github.com/cornelk/hashmap"
+	"sync/atomic"
 )
 
 const (
@@ -29,6 +29,9 @@ var (
 	// コリジョンの発生確率を下げるため、それぞれ10倍の空間を予約しておく。
 	bannedIPMap   = hashmap.New(IPMapSize)
 	bannedUserMap = hashmap.New(UserMapSize)
+
+	bannedIPLock  sync.RWMutex
+	bannedUserLock sync.RWMutex
 
 	userMap = map[string]*User{}
 )
@@ -59,24 +62,30 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
+	bannedUserLock.Lock()
 	p, exists := bannedUserMap.Get(user.Login)
 	if !exists {
+		bannedUserLock.Unlock()
 		return false, nil
 	}
 
 	counter := (*int64)(p)
 	c := int(atomic.LoadInt64(counter))
+	bannedUserLock.Unlock()
 	return UserLockThreshold <= c, nil
 }
 
 func isBannedIP(ip string) (bool, error) {
+	bannedIPLock.Lock()
 	p, exists := bannedIPMap.GetStringKey(ip)
 	if !exists {
+		bannedIPLock.Unlock()
 		return false, nil
 	}
 
 	counter := (*int64)(p)
 	c := int(atomic.LoadInt64(counter))
+	bannedIPLock.Unlock()
 	return IPBanThreshold <= int(c), nil
 }
 
@@ -109,6 +118,8 @@ func attemptLogin(req *http.Request) (*User, error) {
 		var defaultValue int64 = 0
 		var userFailures, ipFailures *int64
 
+		bannedUserLock.Lock()
+		bannedIPLock.Lock()
 		p1, _ := bannedUserMap.GetOrInsert(loginName, unsafe.Pointer(&defaultValue))
 		userFailures = (*int64)(p1)
 		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(&defaultValue))
@@ -123,6 +134,8 @@ func attemptLogin(req *http.Request) (*User, error) {
 			atomic.AddInt64(userFailures, 1)
 			atomic.AddInt64(ipFailures, 1)
 		}
+		bannedIPLock.Unlock()
+		bannedUserLock.Unlock()
 	}()
 
 	if banned, _ := isBannedIP(remoteAddr); banned {
@@ -295,22 +308,6 @@ func lockedUsers() []string {
 }
 
 func warmCache(timeout time.Time) {
-	//rows, _ := db.Query(
-	//	"SELECT id, login, password_hash, salt from users",
-	//)
-	//for rows.Next() {
-	//	user := &User{}
-	//	rows.Scan(&user.ID, &user.Login, &user.PasswordHash, &user.Salt)
-	//	userMap[user.Login] = user
-	//
-	//	var defaultValue int64 = 0
-	//	bannedUserMap.GetOrInsert(user.Login, unsafe.Pointer(&defaultValue))
-	//
-	//	if time.Now().After(timeout) {
-	//		return
-	//	}
-	//}
-
 	rows, _ := db.Query(
 		"SELECT login, ip , succeeded FROM login_log ORDER BY id ASC",
 	)
