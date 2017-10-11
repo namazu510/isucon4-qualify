@@ -143,11 +143,8 @@ func attemptLogin(req *http.Request) (*User, error) {
 		if succeeded {
 			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
 			}
-			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
-			}
 		} else {
 			atomic.AddInt64(userFailures, 1)
-			atomic.AddInt64(ipFailures, 1)
 		}
 		bannedUserLock.Unlock()
 	}()
