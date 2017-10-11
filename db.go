@@ -31,9 +31,6 @@ var (
 	bannedIPMap   = hashmap.New(IPMapSize)
 	bannedUserMap = hashmap.New(UserMapSize)
 
-	bannedIPLock   = new(sync.RWMutex)
-	bannedUserLock = new(sync.RWMutex)
-
 	userMap = map[string]*User{}
 )
 
@@ -63,32 +60,26 @@ func isLockedUser(user *User) (bool, error) {
 		return false, nil
 	}
 
-	bannedUserLock.Lock()
 	p, exists := bannedUserMap.Get(strconv.Itoa(user.ID))
 	if !exists {
-		bannedUserLock.Unlock()
 		return false, nil
 	}
 
 	counter := (*int64)(p)
 	c := int(atomic.LoadInt64(counter))
 	res := UserLockThreshold <= c
-	bannedUserLock.Unlock()
 	return res, nil
 }
 
 func isBannedIP(ip string) (bool, error) {
-	bannedIPLock.Lock()
 	p, exists := bannedIPMap.GetStringKey(ip)
 	if !exists {
-		bannedIPLock.Unlock()
 		return false, nil
 	}
 
 	counter := (*int64)(p)
 	c := int(atomic.LoadInt64(counter))
 	res := IPBanThreshold <= int(c)
-	bannedIPLock.Unlock()
 	return res, nil
 }
 
@@ -122,7 +113,6 @@ func attemptLogin(req *http.Request) (*User, error) {
 		var defaultValue2 = new(int64)
 		var userFailures, ipFailures *int64
 
-		bannedIPLock.Lock()
 		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(defaultValue))
 		ipFailures = (*int64)(p2)
 		if succeeded {
@@ -131,13 +121,11 @@ func attemptLogin(req *http.Request) (*User, error) {
 		} else {
 			atomic.AddInt64(ipFailures, 1)
 		}
-		bannedIPLock.Unlock()
 
 		if user == nil {
 			return
 		}
 
-		bannedUserLock.Lock()
 		p1, _ := bannedUserMap.GetOrInsert(strconv.Itoa(user.ID), unsafe.Pointer(defaultValue2))
 		userFailures = (*int64)(p1)
 		if succeeded {
@@ -146,7 +134,6 @@ func attemptLogin(req *http.Request) (*User, error) {
 		} else {
 			atomic.AddInt64(userFailures, 1)
 		}
-		bannedUserLock.Unlock()
 	}()
 
 	if banned, _ := isBannedIP(remoteAddr); banned {
