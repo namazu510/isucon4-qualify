@@ -71,8 +71,9 @@ func isLockedUser(user *User) (bool, error) {
 
 	counter := (*int64)(p)
 	c := int(atomic.LoadInt64(counter))
+	res := UserLockThreshold <= c
 	bannedUserLock.Unlock()
-	return UserLockThreshold <= c, nil
+	return res, nil
 }
 
 func isBannedIP(ip string) (bool, error) {
@@ -85,8 +86,9 @@ func isBannedIP(ip string) (bool, error) {
 
 	counter := (*int64)(p)
 	c := int(atomic.LoadInt64(counter))
+	res := IPBanThreshold <= int(c)
 	bannedIPLock.Unlock()
-	return IPBanThreshold <= int(c), nil
+	return res, nil
 }
 
 func attemptLogin(req *http.Request) (*User, error) {
