@@ -7,7 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
-
+	"fmt"
+	
 	"github.com/cornelk/hashmap"
 )
 
@@ -220,64 +221,13 @@ func getCurrentUser(userId interface{}) *User {
 func bannedIPs() []string {
 	ips := []string{}
 
-	rows, err := db.Query(
-		"SELECT ip FROM "+
-			"(SELECT ip, MAX(succeeded) as max_succeeded, COUNT(1) as cnt FROM login_log GROUP BY ip) "+
-			"AS t0 WHERE t0.max_succeeded = 0 AND t0.cnt >= ?",
-		IPBanThreshold,
-	)
-
-	if err != nil {
-		return ips
-	}
-
-	defer rows.Close()
-	for rows.Next() {
-		var ip string
-
-		if err := rows.Scan(&ip); err != nil {
-			return ips
+	for k := range bannedIPMap.Iter() { 
+		counter := (*int64)(k.Value)
+		c := int(atomic.LoadInt64(counter))
+		if c >= 10 {
+			ips = append(ips, k.Key.(string))
 		}
-		ips = append(ips, ip)
-	}
-	if err := rows.Err(); err != nil {
-		return ips
-	}
-
-	rowsB, err := db.Query(
-		"SELECT ip, MAX(id) AS last_login_id FROM login_log WHERE succeeded = 1 GROUP by ip",
-	)
-
-	if err != nil {
-		return ips
-	}
-
-	defer rowsB.Close()
-	for rowsB.Next() {
-		var ip string
-		var lastLoginId int
-
-		if err := rows.Scan(&ip, &lastLoginId); err != nil {
-			return ips
-		}
-
-		var count int
-
-		err = db.QueryRow(
-			"SELECT COUNT(1) AS cnt FROM login_log WHERE ip = ? AND ? < id",
-			ip, lastLoginId,
-		).Scan(&count)
-
-		if err != nil {
-			return ips
-		}
-
-		if IPBanThreshold <= count {
-			ips = append(ips, ip)
-		}
-	}
-	if err := rowsB.Err(); err != nil {
-		return ips
+		fmt.Println(ips)
 	}
 
 	return ips
