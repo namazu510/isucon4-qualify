@@ -118,12 +118,12 @@ func attemptLogin(req *http.Request) (*User, error) {
 	defer func() {
 		createLoginLog(succeeded, remoteAddr, loginName, user)
 
-		var defaultValue int64 = 0
-		var defaultValue2 int64 = 0
+		var defaultValue = new(int64)
+		var defaultValue2 = new(int64)
 		var userFailures, ipFailures *int64
 
 		bannedIPLock.Lock()
-		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(&defaultValue))
+		p2, _ := bannedIPMap.GetOrInsert(remoteAddr, unsafe.Pointer(defaultValue))
 		ipFailures = (*int64)(p2)
 		if succeeded {
 			for !atomic.CompareAndSwapInt64(ipFailures, atomic.LoadInt64(ipFailures), 0) {
@@ -138,7 +138,7 @@ func attemptLogin(req *http.Request) (*User, error) {
 		}
 
 		bannedUserLock.Lock()
-		p1, _ := bannedUserMap.GetOrInsert(strconv.Itoa(user.ID), unsafe.Pointer(&defaultValue2))
+		p1, _ := bannedUserMap.GetOrInsert(strconv.Itoa(user.ID), unsafe.Pointer(defaultValue2))
 		userFailures = (*int64)(p1)
 		if succeeded {
 			for !atomic.CompareAndSwapInt64(userFailures, atomic.LoadInt64(userFailures), 0) {
@@ -331,13 +331,13 @@ func warmCache(timeout time.Time) {
 		var succeeded bool
 		rows.Scan(&id, &ip, &succeeded)
 
-		var defaultValue int64 = 0
-		var defaultValue2 int64 = 0
+		var defaultValue = new(int64)
+		var defaultValue2 = new(int64)
 		var userFailures, ipFailures *int64
 
-		p1, _ := bannedUserMap.GetOrInsert(strconv.FormatInt(id, 10), unsafe.Pointer(&defaultValue))
+		p1, _ := bannedUserMap.GetOrInsert(strconv.FormatInt(id, 10), unsafe.Pointer(defaultValue))
 		userFailures = (*int64)(p1)
-		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(&defaultValue2))
+		p2, _ := bannedIPMap.GetOrInsert(ip, unsafe.Pointer(defaultValue2))
 		ipFailures = (*int64)(p2)
 
 		if succeeded {
